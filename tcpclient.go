@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -82,18 +81,11 @@ func (mb *tcpPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
 	return
 }
 
-// Verify confirms transaction, protocol and unit id.
+// Verify confirms protocol and unit id.
 func (mb *tcpPackager) Verify(aduRequest []byte, aduResponse []byte) (err error) {
-	// Transaction id
-	responseVal := binary.BigEndian.Uint16(aduResponse)
-	requestVal := binary.BigEndian.Uint16(aduRequest)
-	if responseVal != requestVal {
-		err = fmt.Errorf("modbus: response transaction id '%v' does not match request '%v'", responseVal, requestVal)
-		return
-	}
 	// Protocol id
-	responseVal = binary.BigEndian.Uint16(aduResponse[2:])
-	requestVal = binary.BigEndian.Uint16(aduRequest[2:])
+	responseVal := binary.BigEndian.Uint16(aduResponse[2:])
+	requestVal := binary.BigEndian.Uint16(aduRequest[2:])
 	if responseVal != requestVal {
 		err = fmt.Errorf("modbus: response protocol id '%v' does not match request '%v'", responseVal, requestVal)
 		return
@@ -135,7 +127,7 @@ type tcpTransporter struct {
 	// Idle timeout to close the connection
 	IdleTimeout time.Duration
 	// Transmission logger
-	Logger *log.Logger
+	Logger Logger
 
 	// TCP connection
 	mu           sync.Mutex
@@ -169,6 +161,10 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 	if _, err = mb.conn.Write(aduRequest); err != nil {
 		return
 	}
+
+	n := 0
+
+RECV:
 	// Read header first
 	var data [tcpMaxLength]byte
 	if _, err = io.ReadFull(mb.conn, data[:tcpHeaderSize]); err != nil {
@@ -177,13 +173,13 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 	// Read length, ignore transaction & protocol id (4 bytes)
 	length := int(binary.BigEndian.Uint16(data[4:]))
 	if length <= 0 {
-		mb.flush(data[:])
 		err = fmt.Errorf("modbus: length in response header '%v' must not be zero", length)
+		mb.flush(data[:])
 		return
 	}
 	if length > (tcpMaxLength - (tcpHeaderSize - 1)) {
-		mb.flush(data[:])
 		err = fmt.Errorf("modbus: length in response header '%v' must not greater than '%v'", length, tcpMaxLength-tcpHeaderSize+1)
+		mb.flush(data[:])
 		return
 	}
 	// Skip unit id
@@ -193,6 +189,17 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 	}
 	aduResponse = data[:length]
 	mb.logf("modbus: received % x\n", aduResponse)
+
+	// Verify transaction id here
+	responseVal := binary.BigEndian.Uint16(aduResponse)
+	requestVal := binary.BigEndian.Uint16(aduRequest)
+	if responseVal != requestVal {
+		err = fmt.Errorf("modbus: response transaction id '%v' does not match request '%v'", responseVal, requestVal)
+		if responseVal < requestVal && n < 3 {
+			n++
+			goto RECV
+		}
+	}
 	return
 }
 
@@ -239,7 +246,7 @@ func (mb *tcpTransporter) Close() error {
 // flush flushes pending data in the connection,
 // returns io.EOF if connection is closed.
 func (mb *tcpTransporter) flush(b []byte) (err error) {
-	if err = mb.conn.SetReadDeadline(time.Now()); err != nil {
+	if err = mb.conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
 		return
 	}
 	// Timeout setting will be reset when reading
@@ -249,6 +256,7 @@ func (mb *tcpTransporter) flush(b []byte) (err error) {
 			err = nil
 		}
 	}
+	mb.logf("modbus: flushed % x\n", b)
 	return
 }
 
@@ -261,6 +269,8 @@ func (mb *tcpTransporter) logf(format string, v ...interface{}) {
 // closeLocked closes current connection. Caller must hold the mutex before calling this method.
 func (mb *tcpTransporter) close() (err error) {
 	if mb.conn != nil {
+		var data [tcpMaxLength]byte
+		mb.flush(data[:])
 		err = mb.conn.Close()
 		mb.conn = nil
 	}
