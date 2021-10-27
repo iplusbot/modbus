@@ -102,7 +102,7 @@ RECV:
 		n += n1
 	} else {
 		// data is corrupted
-		mb.logf("modbus: received corrupted data % x\n", aduResponse)
+		mb.logf("modbus: received %d-bytes corrupted data % x\n", n, data[:n])
 		retries++
 		if retries < 3 {
 			goto RECV
