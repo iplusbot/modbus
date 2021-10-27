@@ -125,7 +125,7 @@ func (mb *rtuSerialTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		return
 	}
 	function := aduRequest[1]
-	functionFail := aduRequest[1] & 0x80
+	functionFail := aduRequest[1] + 0x80
 	bytesToRead := calculateResponseLength(aduRequest)
 	time.Sleep(mb.calculateDelay(len(aduRequest) + bytesToRead))
 

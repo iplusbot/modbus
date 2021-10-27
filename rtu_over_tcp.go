@@ -73,7 +73,7 @@ func (mb *rtuTcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err er
 	var crc crc
 
 	function := aduRequest[1]
-	functionFail := aduRequest[1] & 0x80
+	functionFail := aduRequest[1] + 0x80
 	bytesToRead := calculateResponseLength(aduRequest)
 
 RECV:
